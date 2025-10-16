@@ -18,6 +18,7 @@ class Showtime extends Model
 
     protected $casts = [
         'start_time' => 'datetime',
+        'price' => 'decimal:2',
     ];
 
     // Relationships
@@ -34,5 +35,26 @@ class Showtime extends Model
     public function bookings()
     {
         return $this->hasMany(Booking::class);
+    }
+
+     /**
+     * Get available seats for this showtime
+     */
+    public function getAvailableSeatsAttribute()
+    {
+        $allSeats = $this->auditorium->seats;
+        $bookedSeatIds = $this->bookings()
+            ->where('status', '!=', 'cancelled')
+            ->with('bookingSeats')
+            ->get()
+            ->pluck('bookingSeats')
+            ->flatten()
+            ->pluck('seat_id')
+            ->toArray();
+
+        return $allSeats->map(function ($seat) use ($bookedSeatIds) {
+            $seat->is_booked = in_array($seat->id, $bookedSeatIds);
+            return $seat;
+        });
     }
 }

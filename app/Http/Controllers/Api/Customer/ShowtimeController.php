@@ -11,7 +11,13 @@ class ShowtimeController extends Controller
 {
      public function index(Request $request)
     {
-        $query = Showtime::with(['movie', 'auditorium.cinema']);
+         $query = Showtime::with(['movie', 'auditorium.cinema']);
+
+        // Filter by movie_id (for the /showtimes?movie=123 route)
+        if ($request->has('movie_id') || $request->has('movie')) {
+            $movieId = $request->movie_id ?? $request->movie;
+            $query->where('movie_id', $movieId);
+        }
 
         // Filter by date (e.g., ?date=2025-10-07)
         if ($request->has('date')) {
@@ -25,7 +31,12 @@ class ShowtimeController extends Controller
             );
         }
 
-        return ShowtimeResource::collection($query->orderBy('start_time')->get());
+        // Only get future showtimes
+        $query->where('start_time', '>=', now());
+
+        return ShowtimeResource::collection(
+            $query->orderBy('start_time')->get()
+        );
     }
 
     public function show($id)

@@ -4,6 +4,7 @@ namespace Database\Factories;
 
 use App\Models\Customer;
 use App\Models\Showtime;
+use App\Models\User;
 use Illuminate\Database\Eloquent\Factories\Factory;
 
 /**
@@ -19,7 +20,7 @@ class BookingFactory extends Factory
     public function definition(): array
     {
         return [
-            'customer_id' => Customer::factory(),
+            'user_id' => User::factory(),
             'showtime_id' => Showtime::factory(),
             'booking_time' => now(),
             'total_price' => 0, // Will be updated after assigning seats

@@ -18,7 +18,6 @@ return new class extends Migration
             $table->unsignedInteger('seat_number');
             $table->timestamps();
             $table->unique(['auditorium_id', 'seat_row', 'seat_number']);
-
         });
     }
 

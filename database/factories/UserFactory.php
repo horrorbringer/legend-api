@@ -28,8 +28,13 @@ class UserFactory extends Factory
             'email' => fake()->unique()->safeEmail(),
             'email_verified_at' => now(),
             'password' => static::$password ??= Hash::make('password'),
+            'role' => 'customer', // default role
+            'type' => fake()->randomElement(['guest', 'member']),
             'remember_token' => Str::random(10),
         ];
+
+            // $table->enum('role', ['admin', 'customer'])->default('customer');
+            // $table->enum('type', ['guest', 'member'])->nullable(); // only for customers
     }
 
     /**

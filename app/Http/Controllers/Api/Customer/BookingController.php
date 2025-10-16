@@ -8,6 +8,7 @@ use Illuminate\Http\Request;
 use App\Models\{Booking, BookingSeat, Customer, Seat, Showtime};
 use Carbon\Carbon;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Validator;
 
 /**
  * @OA\Info(
@@ -75,95 +76,150 @@ class BookingController extends Controller
      * )
      */
       public function store(Request $request)
-        {
-        $user = $request->user(); // Authenticated customer
-
-        $data = $request->validate([
+    {
+         $validator = Validator::make($request->all(), [
             'showtime_id' => 'required|exists:showtimes,id',
-            'seat_ids' => 'required|array|min:1',
-            'seat_ids.*' => 'exists:seats,id',
+            'seat_ids' => 'required|array|min:1|max:10',
+            'seat_ids.*' => 'required|exists:seats,id',
+            'total_price' => 'required|numeric|min:0',
+            'payment_method' => 'required|in:khqr,aba',
         ]);
 
-        return DB::transaction(function () use ($data, $user) {
+        if ($validator->fails()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Validation error',
+                'errors' => $validator->errors()
+            ], 422);
+        }
 
-            $showtime = Showtime::findOrFail($data['showtime_id']);
+        try {
+            DB::beginTransaction();
 
-            // 1️⃣ Check for locked or already-booked seats
-            $lockedSeats = DB::table('seat_locks')
-                ->whereIn('seat_id', $data['seat_ids'])
-                ->where('showtime_id', $showtime->id)
-                ->where('locked_until', '>', now())
+            // Check if seats are available (not already booked)
+            $bookedSeats = BookingSeat::whereIn('seat_id', $request->seat_ids)
+                ->whereHas('booking', function ($query) use ($request) {
+                    $query->where('showtime_id', $request->showtime_id)
+                          ->where('status', '!=', 'cancelled');
+                })
                 ->pluck('seat_id')
                 ->toArray();
 
-            if (!empty($lockedSeats)) {
+            if (!empty($bookedSeats)) {
+                DB::rollBack();
                 return response()->json([
-                    'message' => 'Some seats are currently locked. Please try again later.',
-                    'locked_seats' => $lockedSeats,
-                ], 409);
+                    'success' => false,
+                    'message' => 'Some seats are already booked',
+                    'booked_seats' => $bookedSeats
+                ], 400);
             }
 
-            $alreadyBooked = BookingSeat::whereIn('seat_id', $data['seat_ids'])
-                ->whereHas('booking', function ($q) use ($showtime) {
-                    $q->where('showtime_id', $showtime->id);
-                })
-                ->exists();
+            // Create booking
+            $booking = Booking::create([
+                'user_id' => auth()->id(),
+                'showtime_id' => $request->showtime_id,
+                'total_price' => $request->total_price,
+                'status' => 'pending',
+                'payment_method' => $request->payment_method,
+                'booking_time' => now(),
+            ]);
 
-            if ($alreadyBooked) {
-                return response()->json([
-                    'message' => 'One or more selected seats are already booked.',
-                ], 409);
-            }
-
-            // 2️⃣ Lock selected seats (2 minutes)
-            foreach ($data['seat_ids'] as $seatId) {
-                DB::table('seat_locks')->insert([
+            // Create booking seats
+            foreach ($request->seat_ids as $seatId) {
+                BookingSeat::create([
+                    'booking_id' => $booking->id,
                     'seat_id' => $seatId,
-                    'showtime_id' => $showtime->id,
-                    'locked_by' => $user->id,
-                    'locked_until' => Carbon::now()->addMinutes(2),
-                    'created_at' => now(),
-                    'updated_at' => now(),
                 ]);
             }
 
-            // 3️⃣ Create booking
-            $totalPrice = $showtime->price * count($data['seat_ids']);
-            $booking = Booking::create([
-                'customer_id' => $user->id,
-                'showtime_id' => $showtime->id,
-                'total_price' => $totalPrice,
-                'status' => 'pending',
+            DB::commit();
+
+            // Load relationships
+            $booking->load([
+                'showtime.movie',
+                'showtime.auditorium.cinema',
+                'bookingSeats.seat'
             ]);
 
-            // 4️⃣ Attach seats using Eloquent pivot
-            $booking->seats()->attach($data['seat_ids']);
+            return response()->json([
+                'success' => true,
+                'message' => 'Booking created successfully',
+                'data' => $booking
+            ], 201);
 
-            // 5️⃣ Remove locks after successful booking
-            DB::table('seat_locks')
-                ->where('locked_by', $user->id)
-                ->whereIn('seat_id', $data['seat_ids'])
-                ->delete();
-
-            return new BookingResource($booking);
-        });
+        } catch (\Exception $e) {
+            DB::rollBack();
+            return response()->json([
+                'success' => false,
+                'message' => 'Booking failed: ' . $e->getMessage()
+            ], 500);
+        }
     }
     public function show($id, Request $request)
     {
-        $booking = Booking::with(['showtime.movie', 'seats'])
-            ->where('customer_id', $request->user()->id)
-            ->findOrFail($id);
+         try {
+            $booking = Booking::with([
+                'showtime.movie',
+                'showtime.auditorium.cinema',
+                'bookingSeats.seat',
+                'user'
+            ])->findOrFail($id);
 
-        return response()->json($booking);
+            // Check if user owns this booking
+            if ($booking->user_id !== auth()->id() && auth()->user()->role !== 'admin') {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Unauthorized'
+                ], 403);
+            }
+
+            return response()->json([
+                'success' => true,
+                'data' => $booking
+            ]);
+
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Booking not found'
+            ], 404);
+        }
     }
 
     public function cancel($id, Request $request)
     {
-        $booking = Booking::where('customer_id', $request->user()->id)
-            ->where('status', 'pending')
-            ->findOrFail($id);
+        try {
+            $booking = Booking::findOrFail($id);
 
-        $booking->update(['status' => 'cancelled']);
-        return response()->json(['message' => 'Booking cancelled']);
+            // Check if user owns this booking
+            if ($booking->user_id !== auth()->id()) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Unauthorized'
+                ], 403);
+            }
+
+            // Check if booking can be cancelled
+            if ($booking->status === 'paid') {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Cannot cancel paid booking'
+                ], 400);
+            }
+
+            $booking->update(['status' => 'cancelled']);
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Booking cancelled successfully',
+                'data' => $booking
+            ]);
+
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to cancel booking'
+            ], 500);
+        }
     }
 }

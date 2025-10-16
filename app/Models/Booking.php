@@ -10,15 +10,20 @@ class Booking extends Model
      use HasFactory;
 
     protected $fillable = [
-        'customer_id',
+        'user_id',
         'showtime_id',
         'booking_time',
         'total_price',
         'status',
+        'payment_method',
+        'payment_reference',
+        'paid_at',
     ];
 
     protected $casts = [
         'booking_time' => 'datetime',
+        'paid_at' => 'datetime',
+        'total_price' => 'decimal:2',
     ];
 
     public function showtime()
@@ -26,15 +31,19 @@ class Booking extends Model
         return $this->belongsTo(Showtime::class);
     }
 
-    public function seats()
+     public function bookingSeats()
     {
-         return $this->belongsToMany(Seat::class, 'booking_seats')
-                ->using(\App\Models\BookingSeat::class);
+        return $this->hasMany(BookingSeat::class);
     }
 
-    public function customer()
+    public function seats()
     {
-        return $this->belongsTo(User::class, 'customer_id');
+        return $this->belongsToMany(Seat::class, 'booking_seats');
+    }
+
+    public function user()
+    {
+        return $this->belongsTo(User::class );
     }
 
 }

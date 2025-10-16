@@ -48,6 +48,11 @@ class User extends Authenticatable
             'password' => 'hashed',
         ];
     }
+        // Relationships
+    public function bookings()
+    {
+        return $this->hasMany(Booking::class);
+    }
 
      // Helpers
     public function isAdmin(): bool

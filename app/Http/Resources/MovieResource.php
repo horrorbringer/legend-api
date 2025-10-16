@@ -14,33 +14,40 @@ class MovieResource extends JsonResource
      */
     public function toArray(Request $request): array
     {
-        return [
+         return [
             'id' => $this->id,
             'title' => $this->title,
-            'duration_minutes' => $this->duration_minutes,
-            'rating' => $this->rating,
             'genre' => $this->genre,
-            'type' => $this->type, // e.g., '2D', '3D', etc.
+            'rating' => $this->rating,
+            'duration' => "{$this->duration_minutes} mins",
+
+            // ✅ NEW: Use status instead of type
+            'status' => $this->status, // 'now_showing', 'upcoming', 'archived'
+
+            // ✅ NEW: Add format field
+            'format' => $this->format, // '2D', '3D', 'IMAX', '4DX'
+
             'release_date' => $this->release_date?->format('Y-m-d'),
 
-            // Make sure poster URL works correctly (absolute URL)
-            'poster_url' => $this->poster_url
+            // ✅ Always use full poster URL
+            'poster' => $this->poster_url
                 ? (str_starts_with($this->poster_url, 'http')
                     ? $this->poster_url
                     : url($this->poster_url))
                 : url('images/default-poster.png'),
 
-            // Include relationships if loaded (for detailed movie page)
+            // ✅ Grouped showtimes by cinema
             'showtimes' => $this->whenLoaded('showtimes', function () {
-                return $this->showtimes->map(function ($showtime) {
-                    return [
-                        'id' => $showtime->id,
-                        'start_time' => $showtime->start_time,
-                        'end_time' => $showtime->end_time,
-                        'auditorium' => $showtime->auditorium?->name,
-                        'cinema' => $showtime->auditorium?->cinema?->name,
-                    ];
-                });
+                return $this->showtimes
+                    ->groupBy(fn($s) => $s->auditorium->cinema->name ?? 'Unknown Cinema')
+                    ->map(function ($group, $cinema) {
+                        return [
+                            'cinema' => $cinema,
+                            'auditorium' => $group->first()->auditorium->name ?? 'Unknown Hall',
+                            'times' => $group->pluck('start_time')->map(fn($t) => $t->toDateTimeString()),
+                        ];
+                    })
+                    ->values();
             }),
 
             'created_at' => $this->created_at?->toDateTimeString(),

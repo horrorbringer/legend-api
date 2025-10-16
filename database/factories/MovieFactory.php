@@ -16,17 +16,22 @@ class MovieFactory extends Factory
      */
     public function definition(): array
     {
-        $types = ['2D', '3D', 'IMAX'];
-        $genres = ['Action', 'Comedy', 'Drama', 'Horror', 'Sci-Fi', 'Romance'];
+        $formats = ['2D', '3D', 'IMAX', '4DX'];
+        $types = ['Standard', 'Premium', 'Dolby Atmos'];
+        $genres = ['Action', 'Comedy', 'Drama', 'Horror', 'Sci-Fi', 'Romance', 'Thriller', 'Adventure'];
+        $statuses = ['now_showing', 'upcoming', 'archived'];
 
         return [
-            'title' => $this->faker->catchPhrase(),
+            'title' => $this->faker->words(3, true),
             'duration_minutes' => $this->faker->numberBetween(90, 180),
-            'rating' => $this->faker->randomElement(['G', 'PG', 'PG13', 'R']),
+            'rating' => $this->faker->randomFloat(1, 5.0, 9.5), // Rating as decimal (5.0 - 9.5)
             'genre' => $this->faker->randomElement($genres),
-            'release_date' => $this->faker->date(),
+            'poster_url' => 'https://image.tmdb.org/t/p/w500/poster' . $this->faker->unique()->numberBetween(1, 1000) . '.jpg',
+            'status' => $this->faker->randomElement($statuses),
+            'format' => $this->faker->randomElement($formats),
             'type' => $this->faker->randomElement($types),
-            'poster_url' => 'https://picsum.photos/200/300?random=' . $this->faker->unique()->numberBetween(1, 1000),
+            'release_date' => $this->faker->dateTimeBetween('-1 year', '+6 months')->format('Y-m-d'),
+            'description' => $this->faker->paragraph(3),
         ];
     }
 }

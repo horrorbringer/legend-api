@@ -13,13 +13,36 @@ return new class extends Migration
     {
         Schema::create('movies', function (Blueprint $table) {
             $table->id();
+
             $table->string('title', 150);
-            $table->unsignedInteger('duration_minutes')->nullable();
-            $table->string('rating', 10)->nullable();
-            $table->string('genre', 50)->nullable();
-            $table->string('poster_url')->nullable(); // URL to movie poster
-            $table->string('type', 50)->nullable();  // e.g., '2D', '3D', 'IMAX'
-            $table->date('release_date')->nullable();
+
+            $table->unsignedInteger('duration_minutes')
+                ->nullable();
+
+            $table->string('rating', 10)
+                ->nullable();
+
+            $table->string('genre', 50)
+                ->nullable();
+
+            $table->string('poster_url')
+                ->nullable(); // URL to movie poster
+
+            $table->enum('status', ['now_showing', 'upcoming', 'archived'])
+                ->default('now_showing');
+
+            $table->string('format', 20)
+                  ->nullable();
+
+            $table->string('type', 50)
+                ->nullable();  // e.g., '2D', '3D', 'IMAX'
+
+            $table->date('release_date')
+                ->nullable();
+
+            $table->text('description')
+                ->nullable();
+
             $table->timestamps();
         });
     }
