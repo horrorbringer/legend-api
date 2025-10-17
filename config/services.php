@@ -34,5 +34,15 @@ return [
             'channel' => env('SLACK_BOT_USER_DEFAULT_CHANNEL'),
         ],
     ],
+    'bakong' => [
+        'base_url' => env('KHQR_API_URL', 'https://api-bakong.nbc.gov.kh'),
+        'token' => env('KHQR_API_TOKEN'),
+        'account_id' => env('KHQR_ACCOUNT_INFORMATION'),
+        'merchant_name' => env('KHQR_MERCHANT_NAME', 'Cinema Booking System'),
+        'merchant_city' => env('KHQR_MERCHANT_CITY', 'Phnom Penh'),
+        'merchant_id' => env('KHQR_MERCHANT_ID'),
+        'acquiring_bank' => env('KHQR_ACQUIRING_BANK'),
+        'mobile_number' => env('KHQR_MERCHANT_PHONE', '015748353'),
+    ],
 
 ];

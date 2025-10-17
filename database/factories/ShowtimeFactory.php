@@ -22,7 +22,8 @@ class ShowtimeFactory extends Factory
             'movie_id' => Movie::factory(),
             'auditorium_id' => Auditorium::factory(),
             'start_time' => $this->faker->dateTimeBetween('now', '+7 days'),
-            'price' => $this->faker->randomFloat(2, 3.00, 8.00),
+            'price' => $this->faker->randomFloat(2, 0.01, 0.20),
+            // 'price' => $this->faker->randomFloat(2, 3.00, 8.00),
         ];
     }
 }

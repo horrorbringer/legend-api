@@ -18,13 +18,19 @@ return new class extends Migration
             $table->dateTime('booking_time')->useCurrent();
             $table->decimal('total_price', 8, 2)->default(0);
             $table->enum('status', ['pending', 'paid', 'cancelled'])->default('pending');
-            $table->enum('payment_method', ['khqr', 'aba', 'cash'])
+            $table->enum('payment_method', ['khqr', 'aba'])
                   ->nullable();
-            $table->string('payment_reference', 100)
+            $table->string('payment_reference', 255)
                   ->nullable();
             $table->timestamp('paid_at')
                   ->nullable();
             $table->timestamps();
+
+             // Indexes
+            $table->index('user_id');
+            $table->index('showtime_id');
+            $table->index('status');
+            $table->index('payment_reference');
         });
     }
 

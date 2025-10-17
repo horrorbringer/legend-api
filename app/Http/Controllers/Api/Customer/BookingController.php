@@ -2,82 +2,28 @@
 
 namespace App\Http\Controllers\Api\Customer;
 
-use App\Http\Controllers\Controller;
-use App\Http\Resources\BookingResource;
+use App\Models\Booking;
+use App\Models\BookingSeat;
+use App\Services\KHQRService;
 use Illuminate\Http\Request;
-use App\Models\{Booking, BookingSeat, Customer, Seat, Showtime};
-use Carbon\Carbon;
-use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Validator;
+use Illuminate\Support\Facades\{DB, Log, Validator};
+use App\Http\Controllers\Controller;
 
-/**
- * @OA\Info(
- *     title="Cinema Booking API",
- *     version="1.0.0",
- *     description="API for cinema ticket booking system"
- * )
- */
 class BookingController extends Controller
 {
-    /**
-     * @OA\Get(
-     *     path="/api/customer/bookings",
-     *     summary="Get customer's bookings",
-     *     tags={"Customer Booking"},
-     *     security={{"sanctum":{}}},
-     *     @OA\Response(
-     *         response=200,
-     *         description="Successful operation",
-     *         @OA\JsonContent(
-     *             type="array",
-     *             @OA\Items(ref="#/components/schemas/BookingResource")
-     *         )
-     *     ),
-     *     @OA\Response(
-     *         response=401,
-     *         description="Unauthenticated"
-     *     )
-     * )
-     */
-    public function index(Request $request)
-    {
-        $bookings = Booking::where('customer_id', $request->user()->id)
-            ->with(['showtime.movie', 'seats'])
-            ->latest()
-            ->get();
+    protected $khqrService;
 
-        return BookingResource::collection($bookings);
+    public function __construct(KHQRService $khqrService)
+    {
+        $this->khqrService = $khqrService;
     }
 
-
     /**
-     * @OA\Post(
-     *     path="/api/customer/bookings",
-     *     summary="Create a new booking",
-     *     tags={"Customer Booking"},
-     *     @OA\RequestBody(
-     *         required=true,
-     *         @OA\JsonContent(
-     *             required={"customer_name","showtime_id","seat_ids"},
-     *             @OA\Property(property="customer_name", type="string"),
-     *             @OA\Property(property="customer_phone", type="string"),
-     *             @OA\Property(property="showtime_id", type="integer"),
-     *             @OA\Property(property="seat_ids", type="array", @OA\Items(type="integer"))
-     *         )
-     *     ),
-     *     @OA\Response(
-     *         response=201,
-     *         description="Booking successful"
-     *     ),
-     *     @OA\Response(
-     *         response=422,
-     *         description="Validation error"
-     *     )
-     * )
+     * Create a new booking
      */
-      public function store(Request $request)
+    public function store(Request $request)
     {
-         $validator = Validator::make($request->all(), [
+        $validator = Validator::make($request->all(), [
             'showtime_id' => 'required|exists:showtimes,id',
             'seat_ids' => 'required|array|min:1|max:10',
             'seat_ids.*' => 'required|exists:seats,id',
@@ -96,11 +42,11 @@ class BookingController extends Controller
         try {
             DB::beginTransaction();
 
-            // Check if seats are available (not already booked)
+            // Check if seats are available
             $bookedSeats = BookingSeat::whereIn('seat_id', $request->seat_ids)
                 ->whereHas('booking', function ($query) use ($request) {
                     $query->where('showtime_id', $request->showtime_id)
-                          ->where('status', '!=', 'cancelled');
+                          ->whereIn('status', ['pending', 'paid']);
                 })
                 ->pluck('seat_id')
                 ->toArray();
@@ -149,15 +95,270 @@ class BookingController extends Controller
 
         } catch (\Exception $e) {
             DB::rollBack();
+            Log::error('Booking creation failed: ' . $e->getMessage(), [
+                'trace' => $e->getTraceAsString()
+            ]);
             return response()->json([
                 'success' => false,
                 'message' => 'Booking failed: ' . $e->getMessage()
             ], 500);
         }
     }
-    public function show($id, Request $request)
+
+    /**
+     * Generate KHQR code for booking
+     */
+    public function generateKHQR($id)
     {
-         try {
+        try {
+            $booking = Booking::with(['showtime.movie', 'bookingSeats.seat'])
+                ->findOrFail($id);
+
+            // Verify ownership
+            if ($booking->user_id !== auth()->id()) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Unauthorized'
+                ], 403);
+            }
+
+            // Check if booking is pending
+            if ($booking->status !== 'pending') {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Booking is not pending payment. Current status: ' . $booking->status
+                ], 400);
+            }
+
+            // Generate KHQR code with booking ID as reference
+            $qrData = $this->khqrService->generateQRCode(
+                (string) $booking->id, // Use booking ID as reference
+                $booking->total_price,
+                'USD'
+            );
+
+            if (!$qrData['success']) {
+                return response()->json([
+                    'success' => false,
+                    'message' => $qrData['message'] ?? 'Failed to generate QR code'
+                ], 500);
+            }
+
+            // Store MD5 hash for payment verification
+            $booking->update([
+                'payment_reference' => $qrData['md5_hash'] ?? null
+            ]);
+
+            return response()->json([
+                'success' => true,
+                'data' => [
+                    'qr_code' => $qrData['qr_code'],
+                    'qr_string' => $qrData['qr_string'] ?? null,
+                    'reference_number' => $qrData['reference_number'],
+                    'amount' => $qrData['amount'],
+                    'currency' => $qrData['currency'],
+                    'expires_at' => $qrData['expires_at'],
+                    'md5_hash' => $qrData['md5_hash'] ?? null,
+                ]
+            ]);
+
+        } catch (\Exception $e) {
+            Log::error('KHQR generation failed: ' . $e->getMessage(), [
+                'booking_id' => $id,
+                'trace' => $e->getTraceAsString()
+            ]);
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to generate QR code: ' . $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * Check payment status
+     */
+    public function checkPaymentStatus($id)
+    {
+        try {
+            $booking = Booking::findOrFail($id);
+
+            // Verify ownership
+            if ($booking->user_id !== auth()->id()) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Unauthorized'
+                ], 403);
+            }
+
+            // If already paid, return success
+            if ($booking->status === 'paid') {
+                return response()->json([
+                    'success' => true,
+                    'status' => 'paid',
+                    'paid_at' => $booking->paid_at,
+                ]);
+            }
+
+            // If no MD5 hash stored, cannot check
+            if (!$booking->payment_reference) {
+                return response()->json([
+                    'success' => false,
+                    'status' => 'pending',
+                    'message' => 'No payment reference found'
+                ], 400);
+            }
+
+            // Check payment status via KHQR service
+            $result = $this->khqrService->checkTransactionByMd5($booking->payment_reference);
+
+            if ($result['success'] && $result['status'] === 'success') {
+                // Update booking status
+                DB::beginTransaction();
+                try {
+                    $booking->update([
+                        'status' => 'paid',
+                        'paid_at' => now(),
+                    ]);
+                    DB::commit();
+
+                    return response()->json([
+                        'success' => true,
+                        'status' => 'paid',
+                        'message' => 'Payment confirmed',
+                        'transaction_id' => $result['transaction_id'] ?? null,
+                    ]);
+                } catch (\Exception $e) {
+                    DB::rollBack();
+                    throw $e;
+                }
+            }
+
+            return response()->json([
+                'success' => true,
+                'status' => 'pending',
+                'message' => 'Payment not confirmed yet'
+            ]);
+
+        } catch (\Exception $e) {
+            Log::error('Payment status check failed: ' . $e->getMessage());
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to check payment status'
+            ], 500);
+        }
+    }
+
+    /**
+     * KHQR Payment Webhook
+     */
+    public function khqrWebhook(Request $request)
+    {
+        try {
+            // Log webhook data
+            Log::info('KHQR Webhook received', $request->all());
+
+            // Validate webhook signature if needed
+            // TODO: Add webhook signature verification
+
+            // Process webhook data
+            $result = $this->khqrService->processWebhook($request->all());
+
+            if (!$result['success']) {
+                Log::warning('Webhook processing failed', [
+                    'result' => $result,
+                    'request' => $request->all()
+                ]);
+                return response()->json([
+                    'success' => false,
+                    'message' => $result['message'] ?? 'Payment verification failed'
+                ], 400);
+            }
+
+            // Get booking ID from bill_number or reference
+            $bookingId = $result['bill_number'] ?? $request->input('billNumber');
+
+            if (!$bookingId) {
+                Log::error('No booking ID in webhook', $request->all());
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Missing booking reference'
+                ], 400);
+            }
+
+            $booking = Booking::find($bookingId);
+
+            if (!$booking) {
+                Log::warning('Booking not found for webhook', ['booking_id' => $bookingId]);
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Booking not found'
+                ], 404);
+            }
+
+            // Verify amount matches
+            $amount = $result['amount'] ?? $request->input('amount');
+            if ($amount && abs($booking->total_price - $amount) > 0.01) {
+                Log::warning('Payment amount mismatch', [
+                    'booking_id' => $bookingId,
+                    'expected' => $booking->total_price,
+                    'received' => $amount
+                ]);
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Amount mismatch'
+                ], 400);
+            }
+
+            // Check if already paid
+            if ($booking->status === 'paid') {
+                Log::info('Booking already paid', ['booking_id' => $bookingId]);
+                return response()->json([
+                    'success' => true,
+                    'message' => 'Payment already confirmed'
+                ]);
+            }
+
+            // Update booking status
+            DB::beginTransaction();
+            try {
+                $booking->update([
+                    'status' => 'paid',
+                    'payment_reference' => $result['transaction_id'] ?? $booking->payment_reference,
+                    'paid_at' => now(),
+                ]);
+                DB::commit();
+
+                Log::info('Payment confirmed for booking', [
+                    'booking_id' => $bookingId,
+                    'transaction_id' => $result['transaction_id']
+                ]);
+
+                return response()->json([
+                    'success' => true,
+                    'message' => 'Payment confirmed'
+                ]);
+            } catch (\Exception $e) {
+                DB::rollBack();
+                throw $e;
+            }
+
+        } catch (\Exception $e) {
+            Log::error('KHQR webhook error: ' . $e->getMessage(), [
+                'trace' => $e->getTraceAsString()
+            ]);
+            return response()->json([
+                'success' => false,
+                'message' => 'Webhook processing failed'
+            ], 500);
+        }
+    }
+
+    /**
+     * Get booking details
+     */
+    public function show($id)
+    {
+        try {
             $booking = Booking::with([
                 'showtime.movie',
                 'showtime.auditorium.cinema',
@@ -165,8 +366,8 @@ class BookingController extends Controller
                 'user'
             ])->findOrFail($id);
 
-            // Check if user owns this booking
-            if ($booking->user_id !== auth()->id() && auth()->user()->role !== 'admin') {
+            // Check if user owns this booking or is admin
+            if ($booking->user_id !== auth()->id() && (!auth()->user() || auth()->user()->role !== 'admin')) {
                 return response()->json([
                     'success' => false,
                     'message' => 'Unauthorized'
@@ -179,6 +380,7 @@ class BookingController extends Controller
             ]);
 
         } catch (\Exception $e) {
+            Log::error('Booking fetch failed: ' . $e->getMessage());
             return response()->json([
                 'success' => false,
                 'message' => 'Booking not found'
@@ -186,7 +388,39 @@ class BookingController extends Controller
         }
     }
 
-    public function cancel($id, Request $request)
+    /**
+     * Get user bookings
+     */
+    public function getUserBookings()
+    {
+        try {
+            $bookings = Booking::with([
+                'showtime.movie',
+                'showtime.auditorium.cinema',
+                'bookingSeats.seat'
+            ])
+            ->where('user_id', auth()->id())
+            ->orderBy('booking_time', 'desc')
+            ->get();
+
+            return response()->json([
+                'success' => true,
+                'data' => $bookings
+            ]);
+
+        } catch (\Exception $e) {
+            Log::error('Fetch user bookings failed: ' . $e->getMessage());
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to fetch bookings'
+            ], 500);
+        }
+    }
+
+    /**
+     * Cancel booking
+     */
+    public function cancel($id)
     {
         try {
             $booking = Booking::findOrFail($id);
@@ -203,7 +437,14 @@ class BookingController extends Controller
             if ($booking->status === 'paid') {
                 return response()->json([
                     'success' => false,
-                    'message' => 'Cannot cancel paid booking'
+                    'message' => 'Cannot cancel paid booking. Please contact support for refunds.'
+                ], 400);
+            }
+
+            if ($booking->status === 'cancelled') {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Booking is already cancelled'
                 ], 400);
             }
 
@@ -216,6 +457,7 @@ class BookingController extends Controller
             ]);
 
         } catch (\Exception $e) {
+            Log::error('Booking cancellation failed: ' . $e->getMessage());
             return response()->json([
                 'success' => false,
                 'message' => 'Failed to cancel booking'

@@ -11,6 +11,27 @@ use Illuminate\Validation\ValidationException;
 
 class AuthController extends Controller
 {
+        /**
+     * Verify token validity
+     */
+    public function verifyToken(Request $request)
+    {
+        try {
+            // If this endpoint is reached, it means the auth:sanctum middleware passed
+            // and the token is valid
+            return response()->json([
+                'success' => true,
+                'message' => 'Token is valid',
+                'user' => $request->user() // Optionally return fresh user data
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Token validation failed'
+            ], 401);
+        }
+    }
+    
     public function register(Request $r)
     {
         $validated = $r->validate([
